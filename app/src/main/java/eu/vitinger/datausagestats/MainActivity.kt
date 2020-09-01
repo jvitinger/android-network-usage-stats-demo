@@ -5,6 +5,7 @@ import android.app.usage.NetworkStatsManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -16,6 +17,8 @@ import androidx.recyclerview.widget.RecyclerView
 import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.android.synthetic.main.app_item.view.*
 import kotlinx.coroutines.*
+import java.util.*
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
 
@@ -33,9 +36,12 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             val apps = mutableListOf<AppDataUsage>()
 
             withContext(Dispatchers.Default) {
+                Log.i(localClassName, "Processing started.")
+                val startTime = SystemClock.elapsedRealtime()
+
                 for (appInfo in packageManager.getInstalledApplications(0)) {
                     val appDataUsage = AppDataUsage(
-                        appInfo.name ?: appInfo.packageName,
+                        appInfo.packageName,
                         getDataUsage(ConnectivityManager.TYPE_WIFI, appInfo.uid),
                         getDataUsage(ConnectivityManager.TYPE_MOBILE, appInfo.uid)
                     )
@@ -43,6 +49,11 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
                     Log.d(localClassName, "Processed $appDataUsage")
                 }
                 apps.sortByDescending { it.wifiBytes + it.mobileBytes }
+
+                Log.i(
+                    localClassName,
+                    "Processing finished in ${(SystemClock.elapsedRealtime() - startTime)}ms."
+                )
             }
             recycler.adapter = AppsAdapter(apps)
             progress.visibility = View.GONE
@@ -58,26 +69,35 @@ class MainActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     }
 
     private fun getDataUsage(networkType: Int, uid: Int): Long {
-        return getBytes(getNetworkStats(networkType, uid))
+        return getBytes(networkType, getNetworkStats(networkType, uid))
     }
 
     private fun getNetworkStats(networkType: Int, uid: Int): NetworkStats? {
         return (getSystemService(Context.NETWORK_STATS_SERVICE) as NetworkStatsManager).queryDetailsForUid(
             networkType,
-            "",
-            0,
+            null,
+            System.currentTimeMillis() - TimeUnit.DAYS.toMillis(7),
             System.currentTimeMillis(),
             uid
         )
     }
 
-    private fun getBytes(networkStats: NetworkStats?): Long {
+    private fun getBytes(networkType: Int, networkStats: NetworkStats?): Long {
+        var totalBytes = 0L
         if (networkStats != null) {
-            val bucket = NetworkStats.Bucket()
-            networkStats.getNextBucket(bucket)
-            return bucket.rxBytes + bucket.txBytes
+            while (networkStats.hasNextBucket()) {
+                val bucket = NetworkStats.Bucket()
+                networkStats.getNextBucket(bucket)
+                Log.v(
+                    localClassName,
+                    "type $networkType: bucket " +
+                            "from ${Date(bucket.startTimeStamp)} to ${Date(bucket.endTimeStamp)} - " +
+                            ConvertUtils.getSizeWithUnit(bucket.rxBytes + bucket.txBytes)
+                )
+                totalBytes += bucket.rxBytes + bucket.txBytes
+            }
         }
-        return 0
+        return totalBytes
     }
 
     class AppsAdapter(private val apps: List<AppDataUsage>) :
